@@ -106,23 +106,8 @@ struct GlobalEnv {
   size_t NumOOMs = 0;
   size_t NumCrashes = 0;
 
-  size_t NumParallel = 1;
-  // Adaptive config args;
-  size_t NumRuns = 0;
-  bool IsBottleneck = false;
-  bool IsAdaptive = true;
-  size_t AdaCorpus = 1;
-  size_t AdaTime = 10;
-  size_t Suff = 1;
-  size_t SumExecs = 0;
-  size_t CurrentExecs = 1;
-  size_t FileAdd = 0;
-  size_t CovAdd = 0;
-  size_t BottleneckCounts = 0;
 
-  // Focus Function and new files.
-  std::vector<std::string> NewFindFiles;
-  std::vector<std::string> FocusFuncFiles;
+  size_t NumRuns = 0;
 
   std::string StopFile() { return DirPlusFile(TempDir, "STOP"); }
 
@@ -132,56 +117,6 @@ struct GlobalEnv {
         .count();
   }
 
-  void AdaptiveConfig(size_t JobId) {
-    size_t Execs = CurrentExecs;
-    size_t TotalCorpus = Files.size();
-    size_t TotalExecs = NumRuns;
-    size_t R = 3;
-    AdaTime = std::min((size_t)300, JobId);
-    /*if (IsBottleneck){
-      AdaTime = 300;
-    }*/
-    //printf("the line is %f + %f *x+ %f*x*x\n", CurveCoe[0], CurveCoe[1], CurveCoe[2]);
-    //y = CurveCoe[0] + CurveCoe[1] * x + CurveCoe[2] * x * x  dri:  Dy/Dx = CurveCoe[1] + 2*CurveCoe[2]*x
-    //double d = CurveCoe[1] + 2 * CurveCoe[2] * (double)secondsSinceProcessStartUp();
-    //if (JobId > 48 && d < 0.08){
-//    if (JobId > 96){
-  //    IsBottleneck = true;
-    //  NeedEntropic = 1;
-    //  IsCurveFit = false;
-   // }
-
-    if (!CovAdd)
-      BottleneckCounts++;
-    else
-      BottleneckCounts = 0;
-    
-    if (BottleneckCounts > std::max((size_t)8, NumParallel)){
-      IsBottleneck = true;
-      //printf("Entry the bottleneck phase.\n");
-    }
-
-    if (!IsBottleneck){
-      if (TotalExecs > 0 && TotalCorpus > 0 && TotalExecs > TotalCorpus){
-      Suff = TotalExecs / TotalCorpus;
-      }
-    }
-
-    SumExecs += Execs;
-    size_t AverageExecs = SumExecs / JobId;
-    if (Execs > 0 && JobId > NumParallel && !IsBottleneck){
-      NumCorpuses = TotalExecs / (R * Execs * AdaTime) + 1;
-    }
-    if (NumCorpuses < 8)
-      NumCorpuses = 8;
-
-    AdaCorpus = (AverageExecs * AdaTime) / Suff;
-    
-    printf("TotalExecs:%zd  TotalCorpus:%zd   AverageExecs:%zd  Suff:%zd  NumCorpuses: %d"
-                    "AdaCorpus:%zd  AdaTime:%zd  \n",TotalExecs, TotalCorpus, AverageExecs,
-                    Suff, NumCorpuses, AdaCorpus, AdaTime);
-  }
-  
   FuzzJob *CreateNewJob(size_t JobId) {
     Command Cmd(Args);
     Cmd.removeFlag("fork");
@@ -201,24 +136,13 @@ struct GlobalEnv {
     }
     auto Job = new FuzzJob;
     std::string Seeds;
-    size_t LocalCorpusNum = 1;
-    if (IsAdaptive && JobId > NumParallel)
-      LocalCorpusNum = (size_t)AdaCorpus;
-    else
-      LocalCorpusNum = (size_t)sqrt(Files.size() + 2);
-
-    if (LocalCorpusNum < (size_t)sqrt(Files.size() + 2))
-      LocalCorpusNum = (size_t)sqrt(Files.size() + 2);
-    
     if (size_t CorpusSubsetSize =
-            std::min(Files.size(), LocalCorpusNum)) {
+            std::min(Files.size(), (size_t)sqrt(Files.size() + 2))) {
       auto Time1 = std::chrono::system_clock::now();
       if (Group) { // whether to group the corpus.
         size_t AverageCorpusSize = Files.size() / NumCorpuses + 1;
         size_t StartIndex = ((JobId - 1) % NumCorpuses) * AverageCorpusSize;
-	if (AverageCorpusSize < CorpusSubsetSize)
-	  CorpusSubsetSize = AverageCorpusSize;
-	for (size_t i = 0; i < CorpusSubsetSize; i++) {
+        for (size_t i = 0; i < CorpusSubsetSize; i++) {
           size_t RandNum = (*Rand)(AverageCorpusSize);
           size_t Index = RandNum + StartIndex;
           Index = Index < Files.size() ? Index
@@ -227,18 +151,6 @@ struct GlobalEnv {
           Seeds += (Seeds.empty() ? "" : ",") + SF;
           CollectDFT(SF);
         }
-	//printf("debug NewFindFiles.size() is %zu, slelect %lu new add seeds \n", NewFindFiles.size(), 2 * CoverageAdd);
-	if (2 * FileAdd > CorpusSubsetSize)
-	  FileAdd = CorpusSubsetSize / 2;
-	for (size_t i = 0; i < 2 * FileAdd; i++) {
-          if (NewFindFiles.size() == 0)
-            break;
-          size_t Index = NewFindFiles.size() - i -1;
-          auto &SF = NewFindFiles[Index];
-          Seeds += (Seeds.empty() ? "" : ",") + SF;
-          CollectDFT(SF);
-        }
-	//printf("select %lu new add seeds\n", 2 * FileAdd);
       } else {
         for (size_t i = 0; i < CorpusSubsetSize; i++) {
           auto &SF = Files[Rand->SkewTowardsLast(Files.size())];
@@ -287,7 +199,6 @@ struct GlobalEnv {
   void RunOneMergeJob(FuzzJob *Job) {
     auto Stats = ParseFinalStatsFromLog(Job->LogPath);
     NumRuns += Stats.number_of_executed_units;
-    CurrentExecs = Stats.average_exec_per_sec;
 
     std::vector<SizedFile> TempFiles, MergeCandidates;
     // Read all newly created inputs and their feature sets.
@@ -315,11 +226,7 @@ struct GlobalEnv {
            Stats.average_exec_per_sec, NumOOMs, NumTimeouts, NumCrashes,
            secondsSinceProcessStartUp(), Job->JobId, Job->DftTimeInSeconds);
 
-    if (MergeCandidates.empty()){
-      FileAdd = 0;
-      CovAdd = 0;
-      return;
-    }
+    if (MergeCandidates.empty()) return;
 
     std::vector<std::string> FilesToAdd;
     std::set<uint32_t> NewFeatures, NewCov;
@@ -328,8 +235,6 @@ struct GlobalEnv {
     CrashResistantMerge(Args, {}, MergeCandidates, &FilesToAdd, Features,
                         &NewFeatures, Cov, &NewCov, Job->CFPath, false,
                         IsSetCoverMerge);
-    FileAdd = FilesToAdd.size();
-    CovAdd = NewCov.size();
     for (auto &Path : FilesToAdd) {
       auto U = FileToVector(Path);
       auto NewPath = DirPlusFile(MainCorpusDir, Hash(U));
@@ -341,29 +246,17 @@ struct GlobalEnv {
             FilesSizes.begin();
         FilesSizes.insert(FilesSizes.begin() + Idx, UnitSize);
         Files.insert(Files.begin() + Idx, NewPath);
-	NewFindFiles.push_back(NewPath);
       } else {
         Files.push_back(NewPath);
       }
     }
     Features.insert(NewFeatures.begin(), NewFeatures.end());
     Cov.insert(NewCov.begin(), NewCov.end());
-    bool FindFunc = false;
-    for (auto Idx : NewCov){
+    for (auto Idx : NewCov)
       if (auto *TE = TPC.PCTableEntryByIdx(Idx))
-        if (TPC.PcIsFuncEntry(TE)){
+        if (TPC.PcIsFuncEntry(TE))
           PrintPC("  NEW_FUNC: %p %F %L\n", "",
                   TPC.GetNextInstructionPc(TE->PC));
-          FindFunc = true;
-	}
-    }
-    if (FindFunc){
-      for (auto &Path : FilesToAdd){
-        auto U = FileToVector(Path);
-	auto NewPath = DirPlusFile(MainCorpusDir, Hash(U));
-	FocusFuncFiles.push_back(NewPath);
-      }
-    }
   }
 
   void CollectDFT(const std::string &InputPath) {
@@ -429,8 +322,6 @@ void FuzzWithFork(Random &Rand, const FuzzingOptions &Options,
   Env.ProcessStartTime = std::chrono::system_clock::now();
   Env.DataFlowBinary = Options.CollectDataFlow;
   Env.Group = Options.ForkCorpusGroups;
-  Env.IsAdaptive = (bool)Options.ForkIsAdaptive;
-  Env.NumParallel = NumJobs;
 
   std::vector<SizedFile> SeedFiles;
   for (auto &Dir : CorpusDirs)
@@ -530,7 +421,7 @@ void FuzzWithFork(Random &Rand, const FuzzingOptions &Options,
     // Since the number of corpus seeds will gradually increase, in order to
     // control the number in each group to be about three times the number of
     // seeds selected each time, the number of groups is dynamically adjusted.
-    /*if (Env.Files.size() < 2000)
+    if (Env.Files.size() < 2000)
       Env.NumCorpuses = 12;
     else if (Env.Files.size() < 6000)
       Env.NumCorpuses = 20;
@@ -542,7 +433,7 @@ void FuzzWithFork(Random &Rand, const FuzzingOptions &Options,
       Env.NumCorpuses = 60;
     else
       Env.NumCorpuses = 80;
-    */
+
     // Continue if our crash is one of the ignored ones.
     if (Options.IgnoreTimeouts && ExitCode == Options.TimeoutExitCode)
       Env.NumTimeouts++;
@@ -583,11 +474,8 @@ void FuzzWithFork(Random &Rand, const FuzzingOptions &Options,
       StopJobs();
       break;
     }
- 
-    JobId++;
-    if (Env.IsAdaptive)
-      Env.AdaptiveConfig(JobId);
-    FuzzQ.Push(Env.CreateNewJob(JobId));
+
+    FuzzQ.Push(Env.CreateNewJob(JobId++));
   }
 
   for (auto &T : Threads)
